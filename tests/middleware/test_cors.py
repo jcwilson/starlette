@@ -118,6 +118,56 @@ def test_cors_disallowed_preflight():
     assert response.text == "Disallowed CORS origin, method, headers"
 
 
+def test_cors_preflight_allow_all_methods():
+    app = Starlette()
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_methods=["*"],
+    )
+
+    @app.route("/")
+    def homepage(request):
+        pass  # pragma: no cover
+
+    client = TestClient(app)
+
+    headers = {
+        "Origin": "https://example.org",
+        "Access-Control-Request-Method": "POST",
+    }
+
+    for method in ("DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT"):
+        response = client.options("/", headers=headers)
+        assert response.status_code == 200
+        assert method in response.headers["access-control-allow-methods"]
+
+
+def test_cors_allow_all_methods():
+    app = Starlette()
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_methods=["*"],
+    )
+
+    @app.route(
+        "/", methods=("delete", "get", "head", "options", "patch", "post", "put")
+    )
+    def homepage(request):
+        return PlainTextResponse("Homepage", status_code=200)
+
+    client = TestClient(app)
+
+    headers = {"Origin": "https://example.org"}
+
+    for method in ("delete", "get", "head", "options", "patch", "post", "put"):
+        response = getattr(client, method)("/", headers=headers, json={})
+        assert response.status_code == 200
+
+
 def test_cors_allow_origin_regex():
     app = Starlette()
 
@@ -245,12 +295,10 @@ def test_cors_vary_header_defaults_to_origin():
     assert response.headers["vary"] == "Origin"
 
 
-def test_cors_vary_header_is_properly_set():
+def test_cors_vary_header_is_not_set_for_non_credentialed_request():
     app = Starlette()
 
-    app.add_middleware(CORSMiddleware, allow_origins=["https://example.org"])
-
-    headers = {"Origin": "https://example.org"}
+    app.add_middleware(CORSMiddleware, allow_origins=["*"])
 
     @app.route("/")
     def homepage(request):
@@ -260,13 +308,52 @@ def test_cors_vary_header_is_properly_set():
 
     client = TestClient(app)
 
-    response = client.get("/", headers=headers)
+    response = client.get("/", headers={"Origin": "https://someplace.org"})
+    assert response.status_code == 200
+    assert response.headers["vary"] == "Accept-Encoding"
+
+
+def test_cors_vary_header_is_properly_set_for_credentialed_request():
+    app = Starlette()
+
+    app.add_middleware(CORSMiddleware, allow_origins=["*"])
+
+    @app.route("/")
+    def homepage(request):
+        return PlainTextResponse(
+            "Homepage", status_code=200, headers={"Vary": "Accept-Encoding"}
+        )
+
+    client = TestClient(app)
+
+    response = client.get(
+        "/", headers={"Cookie": "foo=bar", "Origin": "https://someplace.org"}
+    )
+    assert response.status_code == 200
+    assert response.headers["vary"] == "Accept-Encoding, Origin"
+
+
+def test_cors_vary_header_is_properly_set_when_allow_origins_is_not_wildcard():
+    app = Starlette()
+
+    app.add_middleware(CORSMiddleware, allow_origins=["https://example.org"])
+
+    @app.route("/")
+    def homepage(request):
+        return PlainTextResponse(
+            "Homepage", status_code=200, headers={"Vary": "Accept-Encoding"}
+        )
+
+    client = TestClient(app)
+
+    response = client.get("/", headers={"Origin": "https://example.org"})
     assert response.status_code == 200
     assert response.headers["vary"] == "Accept-Encoding, Origin"
 
 
 def test_cors_allowed_origin_does_not_leak_between_credentialed_requests():
     app = Starlette()
+
     app.add_middleware(
         CORSMiddleware, allow_origins=["*"], allow_headers=["*"], allow_methods=["*"]
     )
